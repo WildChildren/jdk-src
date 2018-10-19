@@ -598,6 +598,7 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
      * does not wish to provide fail-fast iterators, this field may be
      * ignored.
      */
+    // 一句话说明：用于并发修改的时候在迭代器中快速错误。即：fail-fast，抛出 ConcurrentModificationExceptions
     protected transient int modCount = 0;
 
     private void rangeCheckForAdd(int index) {

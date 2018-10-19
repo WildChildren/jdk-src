@@ -623,22 +623,41 @@ public class HashMap<K,V> extends AbstractMap<K,V>
      */
     final V putVal(int hash, K key, V value, boolean onlyIfAbsent,
                    boolean evict) {
+        /**
+         * 1.8 的源码中，已经去掉了原本 resize 的头插法了，屏蔽掉了（比这个人分析）成环链死循环的问题；
+         *
+         * 但是任然会有以下的问题：
+         * 1、并发：读后写这样的操作的时候，会导致写数据丢失；（同一数据根据上一数据依赖更新后续数据）
+         * 2、并发插入的时候：会导致插入数据丢失（同时都得到了需要插入的位置，然后在这个时候发生了写入）
+         *
+         * 并发不安全的根本：读写没有同步化
+         */
+
         Node<K,V>[] tab; Node<K,V> p; int n, i;
+        // 其实初始化
         if ((tab = table) == null || (n = tab.length) == 0)
             n = (tab = resize()).length;
+        // 不存的 node 的时候新建 node
         if ((p = tab[i = (n - 1) & hash]) == null)
             tab[i] = newNode(hash, key, value, null);
         else {
             Node<K,V> e; K k;
+            // 就是链表的第一个节点，直接更新
             if (p.hash == hash &&
                 ((k = p.key) == key || (key != null && key.equals(k))))
                 e = p;
+            // 红黑树遍历
             else if (p instanceof TreeNode)
                 e = ((TreeNode<K,V>)p).putTreeVal(this, tab, hash, key, value);
+            // 普通链表
             else {
+                // 遍历普通链表，找到的对象最终是在 e
                 for (int binCount = 0; ; ++binCount) {
-                    if ((e = p.next) == null) {
+                    // 实际是从连接的第二个节点开始查找的，此时计数为 0
+                    if ((e = p.next) == null) { // 遍历到了末尾，新建节点插入
                         p.next = newNode(hash, key, value, null);
+                        // TREEIFY_THRESHOLD = 8，表示单个节点链表是在长度 - 2 ≥ 7，也就是第九个节点插入 “之后” 将进行树化，
+                        // 这可能是个点，考察是不是仔细阅读了
                         if (binCount >= TREEIFY_THRESHOLD - 1) // -1 for 1st
                             treeifyBin(tab, hash);
                         break;
@@ -649,17 +668,24 @@ public class HashMap<K,V> extends AbstractMap<K,V>
                     p = e;
                 }
             }
+
+            // e 为 null 表示新插入数据，不为 null 表示 update 数据
             if (e != null) { // existing mapping for key
                 V oldValue = e.value;
+                // 符合要求的更新值
                 if (!onlyIfAbsent || oldValue == null)
                     e.value = value;
+                // hashMap 中是个空方法，在 linkedHashMap 中主要做的是，修改顺序链表中的值
                 afterNodeAccess(e);
                 return oldValue;
             }
         }
+        // 计数+1
         ++modCount;
+        // 根据当前长度判断：是否需要进行扩容（扩容的时候会出现线程不安全的现象之一：jdk 1.7 resize()链表成环）
         if (++size > threshold)
             resize();
+        // hashMap 中是个空方法
         afterNodeInsertion(evict);
         return null;
     }
@@ -678,50 +704,104 @@ public class HashMap<K,V> extends AbstractMap<K,V>
         int oldCap = (oldTab == null) ? 0 : oldTab.length;
         int oldThr = threshold;
         int newCap, newThr = 0;
+
+        // 原始容量大于零
         if (oldCap > 0) {
+            // 当容量大于等于最大容量的时候 1 << 30(避免：else if 中出现溢出)，对于 Integer.MAX_VALUE 等于 1 << 31
+            // “数组容量”大于最大容量之后就不会增加节点了
             if (oldCap >= MAXIMUM_CAPACITY) {
                 threshold = Integer.MAX_VALUE;
                 return oldTab;
             }
+            // 新容量扩容一倍，1、容量小于最大值；2、原容量 ≥ 16
+            // 达到条件: 下限翻倍
             else if ((newCap = oldCap << 1) < MAXIMUM_CAPACITY &&
                      oldCap >= DEFAULT_INITIAL_CAPACITY)
                 newThr = oldThr << 1; // double threshold
         }
+        // 设置了下限，但没有加入数据！！将新的容量置为: 下限的大小
         else if (oldThr > 0) // initial capacity was placed in threshold
             newCap = oldThr;
+        // 初始化
         else {               // zero initial threshold signifies using defaults
-            newCap = DEFAULT_INITIAL_CAPACITY;
+            newCap = DEFAULT_INITIAL_CAPACITY; // 初始化为 16
+            // 默认值的 75% 大小为下限，也就是每次达到 75% 就会进行 resize 扩容
             newThr = (int)(DEFAULT_LOAD_FACTOR * DEFAULT_INITIAL_CAPACITY);
         }
+
+        // 设置了下限，但没有加入数据！！类似于初始化
         if (newThr == 0) {
             float ft = (float)newCap * loadFactor;
             newThr = (newCap < MAXIMUM_CAPACITY && ft < (float)MAXIMUM_CAPACITY ?
                       (int)ft : Integer.MAX_VALUE);
         }
         threshold = newThr;
+
+        // 新数组
         @SuppressWarnings({"rawtypes","unchecked"})
             Node<K,V>[] newTab = (Node<K,V>[])new Node[newCap];
         table = newTab;
         if (oldTab != null) {
+            // 遍历数组
             for (int j = 0; j < oldCap; ++j) {
                 Node<K,V> e;
+                // 遍历原始数组
                 if ((e = oldTab[j]) != null) {
                     oldTab[j] = null;
+                    // 如果只有一个数据
                     if (e.next == null)
                         newTab[e.hash & (newCap - 1)] = e;
+                    // 树型数据
                     else if (e instanceof TreeNode)
                         ((TreeNode<K,V>)e).split(this, newTab, j, oldCap);
+                    // 普通链表数据
                     else { // preserve order
                         Node<K,V> loHead = null, loTail = null;
                         Node<K,V> hiHead = null, hiTail = null;
                         Node<K,V> next;
+                        // 遍历链表
                         do {
                             next = e.next;
+                            /**
+                             *
+                             * 原始 hash  = key.hashCode() ^ (key.hashCode() >> 16)
+                             * 原始 index = hash & (length - 1)
+                             * hash & oldCap
+                             * 举个栗子：
+                             * 假设 hash = 1010 1010  8位来演示，数组长度是 32, 128
+                             * index = hash & 31         hash & 128   a
+                             *         1010 1010         1010 1010
+                             *         0001 1111         0011 1111    注意看这一行的数字 A
+                             *       = 0000 1010       = 0010 1010
+                             *       = 8               = 40
+                             *
+                             * hash & 32 = 1010 1010     1010 1010    b
+                             *             0010 0000     0100 0000    注意看这一行的数字 B
+                             *           = 0010 0000   = 0000 0000
+                             *           = 32          = 0
+                             *
+                             * hash & (64 - 1) = 1010 1010     1010 1010
+                             *                   0011 1111     0111 1111    注意看这一行的数字 C
+                             *                 = 0010 1010   = 0010 1010
+                             *                 = 40          = 40
+                             *
+                             * A + B = A | B = 0011 1111
+                             *                 0100 0000
+                             *               = 0111 1111
+                             *
+                             * 所以得出一个结论：newIndex = oldIndex + (hash & oldCap)
+                             */
+
+                            // 当这个值为 0 的时候索引没有发生变化
+                            // 于是可以得出：l 的链表内容为原索引处的新链表数据
                             if ((e.hash & oldCap) == 0) {
+                                // 链表没有尾，表示没有插入数据
                                 if (loTail == null)
                                     loHead = e;
+                                // 否则在尾链节点追加
                                 else
                                     loTail.next = e;
+                                // 所以1.8是尾加法，不是头插法
                                 loTail = e;
                             }
                             else {

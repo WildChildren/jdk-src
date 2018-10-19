@@ -220,6 +220,8 @@ public class ArrayList<E> extends AbstractList<E>
     }
 
     private void ensureCapacityInternal(int minCapacity) {
+        // 没有设置基础的容量的时候。
+        // 加入第一个元素的时候开始扩容，第一次就是十个长度
         if (elementData == DEFAULTCAPACITY_EMPTY_ELEMENTDATA) {
             minCapacity = Math.max(DEFAULT_CAPACITY, minCapacity);
         }
@@ -228,8 +230,10 @@ public class ArrayList<E> extends AbstractList<E>
     }
 
     private void ensureExplicitCapacity(int minCapacity) {
+        // 数组结构修改次数加一
         modCount++;
 
+        // 也就是说在数组 "容量不够" 的时候才会进行扩容 grow 操作。
         // overflow-conscious code
         if (minCapacity - elementData.length > 0)
             grow(minCapacity);
